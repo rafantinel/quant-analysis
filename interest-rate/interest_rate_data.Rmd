@@ -1,0 +1,16 @@
+# This program is used to obtain interest rate data from different countries
+
+
+```{r}
+
+Brazil,
+USA
+
+```
+
+
+# Load data
+
+# Animate graphics
+
+# Highlight important events
