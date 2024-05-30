@@ -1,4 +1,8 @@
-# This program is used to obtain interest rate data from different countries
+# Forcasting Interest Rates
+
+## interest_rate_data.Rmd
+
+This program is used to obtain interest rate data from different countries.
 
 The file **fedfunds.csv** contains historical effective federal funds rate data, downloaded from [FRED](https://fred.stlouisfed.org/series/FEDFUNDS). The start date is 1954-07-01 and the end date is 2024-04-01. The rate is expressed annually.
 
