@@ -1,16 +1,121 @@
 # This program is used to obtain interest rate data from different countries
 
+## Import packages
 
 ```{r}
 
-Brazil,
-USA
+library(tidyverse)
+library(lubridate)
+library(ggthemes)
+library(gganimate)
+library(gifski)
+source("../objects_and_functions.R")
 
 ```
 
 
-# Load data
+## Load data
 
-# Animate graphics
 
-# Highlight important events
+```{r}
+
+# Fedfunds data
+fedfunds <- read.csv2("fedfunds.csv")
+
+head(fedfunds)
+
+# Seliec data
+selic <- read.csv2("selic.csv")
+
+head(selic)
+
+
+```
+
+
+## Data processing
+
+
+```{r}
+
+# End date for analysis
+end_date <- date("2024-03-31")
+
+# Start date for analysis (30 years from end date)
+start_date <- ymd(end_date) - years(20)
+
+
+fedfunds <- fedfunds %>%
+  mutate(
+    prev_date = ceiling_date(ymd(lag(observation_date)), "month") - days(1), # Last day of previous date to match Selic data
+    rate_name = ("EFFR")
+  ) %>%
+  filter(between(prev_date, start_date, end_date)) %>% # Filter selected time interval
+  rename(
+    date = prev_date,
+    key_rate = fedfunds
+  ) %>% # Rename columns
+  select(date, key_rate, rate_name) # Select columns
+
+selic <- selic %>%
+  mutate(
+    date = ceiling_date(ymd(date(paste0(data, "-01"))), "month") - days(1), # Last day of month
+    selic = round(((1 + selic / 100) ^ 12 - 1) * 100, 2), # Annualize rate
+    rate_name = "Selic"
+  ) %>%
+  filter(between(date, start_date, end_date)) %>% # Filter selected time interval
+  rename(key_rate = selic) %>% # Rename columns
+  select(date, key_rate, rate_name) # Select columns
+
+# Bind rows of the two datasets
+key_rates_dataset <- rbind(fedfunds, selic)
+
+# Display first rows
+head(key_rates_dataset)
+ 
+
+```
+
+## Create animated graphics
+
+
+```{r}
+
+key_rates_graph <- key_rates_dataset %>%
+  ggplot(aes(x = date, y = key_rate, color = rate_name)) +
+  geom_line(linewidth = 1, alpha = 0.7) + # Line graphic
+  scale_colour_manual(values = color_pallete[c(3, 4)]) + # Colors
+  theme_classic() + # Main theme
+  labs(
+    title = "Brazil vs. U.S. Interest Rate",
+    x = "Date",
+    y = "Annual Interest rate %",
+    color = "Interest rate"
+  ) + # Titles
+  scale_x_date(date_labels = "%Y-%m", breaks = "12 months") + # Date labels scale
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, color = "white"),
+    axis.text.y = element_text(color = "white"),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, color = "white"),
+    plot.background = element_rect(fill = "black"),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+    legend.text = element_text(color = "white"),
+    legend.title = element_text(color = "white"),
+    panel.background = element_rect(fill = NA)
+  ) # Theme settings
+
+# Create animation
+key_rates_graph_animated <- key_rates_graph + transition_reveal(date)
+
+# Render animation
+animate(key_rates_graph_animated, fps = 30, width = 700, height = 500, duration = 10, nframes = nrow(key_rates_dataset) / 2, renderer = av_renderer(), res = 100)
+
+# Save animation
+anim_save("interest_rate_evolution.avi")
+
+
+```
+
+
