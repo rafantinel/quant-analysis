@@ -1,0 +1,871 @@
+
+
+# Import packages
+
+
+```{r}
+
+library(tidyverse) # Dplyr and other packages
+library(patchwork) # Combine separate ggplots
+library(ggcorrplot) # Correlation plots
+library(viridisLite) # Virids color scale
+library(lmtest) # Tests for linear model
+library(car) # Other test for linear model
+library(caret) # Regression training
+library(scales) # Custom scales
+source("../objects_and_functions.R") # Helper objects and functions
+
+```
+
+
+# Read files
+
+
+```{r}
+
+# FFR Target Range - Lower limit
+ffr_tarl <- read.csv("DFEDTARL.csv")
+# FFR Target Range - Upper limit
+ffr_taru <- read.csv("DFEDTARU.csv")
+
+# Display data
+head(ffr_tarl, 10)
+head(ffr_taru, 10)
+
+
+```
+
+
+# Build a target range per year
+
+
+```{r}
+
+# Lower limit
+ffr_lowest_tarl <- ffr_tarl %>%
+  mutate(year = year(date(DATE))) %>% # Get year
+  group_by(year) %>% # Group by year
+  summarise(tarl = min(DFEDTARL)) # Lowest rate of each year
+
+# Upper limit
+ffr_highest_taru <- ffr_taru %>%
+  mutate(year = year(date(DATE))) %>% # Get year
+  group_by(year) %>% # Group by year
+  summarise(taru = min(DFEDTARU)) # Highest rate of each year
+
+# Join lower and upper limit set
+ffr_set <- inner_join(ffr_lowest_tarl, ffr_highest_taru, "year") %>%
+  mutate(
+    tr_mid = apply(.[, c("tarl", "taru")], 1, mean), # Calculate the mid point of the target range for each year
+    year = as.integer(year) # Change year to integer
+  ) 
+
+# Display the ffr set
+ffr_set
+
+
+```
+
+
+# Plot the mid point of ffr's target range
+
+
+```{r}
+
+
+ffr_set %>%
+  ggplot(aes(x = year, y = tr_mid)) +
+  geom_line(color = color_pallete[2], linewidth = 1) + # Line graphic
+  theme_classic() + # Main theme
+  labs(
+    title = "Annual FFR - Mid Point",
+    x = "Year",
+    y = "Mid Point %"
+  ) + # Titles
+  scale_x_continuous(breaks = ffr_set$year) + # Display all years
+  scale_y_continuous(breaks = seq(0, 5, 1)) +
+  qa_dark # Add theme settings
+
+
+```
+
+# Calculate the mid point with the raw data (every 7 days)
+
+
+```{r}
+
+ffr_set_full <- inner_join(ffr_tarl, ffr_taru, "DATE") %>%
+  mutate(
+    tr_mid = apply(.[, c("DFEDTARL", "DFEDTARU")], 1, mean),
+    DATE = date(DATE)
+  ) %>%
+  rename(date = DATE) %>%
+  select(date, tr_mid)
+
+```
+
+
+# Plot the mid point for the ffr's target range with the raw data
+
+
+```{r}
+
+p_ffr_set_full <- ffr_set_full %>%
+  ggplot(aes(x = date, y = tr_mid)) +
+  geom_line(color = color_pallete[3], linewidth = 1) + # Line graphic
+  theme_classic() + # Main theme
+  labs(
+    title = "FFR - Mid Point",
+    x = "Date",
+    y = "Mid Point %"
+  ) + # Titles
+  scale_x_date(date_labels = "%Y-%m-%d", breaks = "12 months") + # Date labels scale
+  scale_y_continuous(breaks = seq(0, 5, 1)) +
+  qa_dark # Add theme settings
+
+p_ffr_set_full
+
+```
+
+
+# Histogram analysis - FFR Series
+
+
+```{r}
+
+ffr_set_full %>%
+  ggplot(aes(x = tr_mid, y = after_stat(count) * 100 / sum(count))) +
+  geom_histogram(color = "white", fill = color_pallete[3], bins = 5) +
+  theme_classic() + # Main theme
+  labs(
+    title = "FFR - Histogram",
+    x = "FFR",
+    y = "Freq %"
+  ) + # Titles
+  qa_dark + # Add theme settings
+  theme(axis.text.x = element_text(angle = 0))
+
+```
+
+# FFR series - time division
+
+
+```{r}
+
+# The behavior of the series suggests that we may need a non conventional model to create a reliable forecast using only ffr's mid point data
+p_ffr_set_full +
+  scale_x_date(date_labels = "%Y-%m-%d", breaks = "6 months") +
+  geom_vline(xintercept = date("2016-11-30"), color = "white", linetype = "dotted", linewidth = 1) +
+  geom_vline(xintercept = date("2020-03-01"), color = "white", linetype = "dotted", linewidth = 1) +
+  geom_vline(xintercept = date("2022-03-01"), color = "white", linetype = "dotted", linewidth = 1)
+  
+
+```
+
+# Import inflation data
+
+
+```{r}
+
+# Since the target range depend on inflation levels, it's important to know inflation's behavior
+
+# Import CPI data
+cpi_set <- read.csv("MEDCPI.csv")
+
+# Full CPI set
+cpi_set <- cpi_set %>%
+  mutate(DATE = date(DATE)) %>%
+  rename(cpi = MEDCPIM158SFRBCLE,
+         date = DATE)
+
+cpi_set
+
+```
+
+
+# Select first day of each month in FFR set
+
+
+```{r}
+
+# Select the first day of each month in FFR set
+ffr_set_first_day <- ffr_set_full %>%
+  mutate(
+    year_and_month = year(date) * 100 + month(date),
+    day = day(date)
+  ) %>%
+  group_by(year_and_month) %>%
+  filter(day == min(day) & day == 1) %>%
+  ungroup() %>%
+  select(-all_of(c("day", "year_and_month")))
+
+# Minimum date
+min_date_ffr <- min(ffr_set_first_day$date)
+# Maximum date
+max_date_ffr <- max(ffr_set_first_day$date)
+
+
+```
+
+
+# Target variable: FFR's mid point in january 1st (6 months ahead)
+
+
+```{r}
+
+h <- 6
+
+ffr_set_h6 <- ffr_set_first_day %>%
+  filter(date >= min_date_ffr %m+% months(h)) %>%
+  rename(tr_mid_h6 = tr_mid) %>%
+  mutate(date = date %m-% months(h))
+
+ffr_set_h6
+
+```
+
+
+# Add the target variable to the FFR set
+
+
+```{r}
+
+full_set <- ffr_set_first_day %>%
+  filter(between(date, date("2022-03-01"), max_date_ffr)) %>%
+  filter(date <= max_date_ffr) %>%
+  rename(tr_mid_h0 = tr_mid) %>%
+  inner_join(ffr_set_h6, "date")
+
+forecast_set <- ffr_set_first_day %>%
+  filter(between(date, date("2021-03-01"), max_date_ffr)) %>%
+  rename(tr_mid_h0 = tr_mid) %>%
+  left_join(ffr_set_h6, "date") %>%
+  filter(is.na(tr_mid_h6)) %>%
+  mutate(set = "forecast")
+
+```
+
+
+# Create train and test partition
+
+
+```{r}
+
+set.seed(3)
+
+
+ind <- createDataPartition(full_set$tr_mid_h6, 1, 0.7, FALSE)
+
+train_set <- full_set[ind, ] %>%
+  mutate(set = "train")
+
+test_set <- full_set[-ind, ] %>%
+  mutate(set = "test")
+
+h0_set <- rbind(train_set, test_set, forecast_set) %>%
+  arrange(date)
+
+# Minimum date from h0 set
+min_date_h0 <- min(h0_set$date)
+# Maximum date from h0 set
+max_date_h0 <- max(h0_set$date)
+
+cat("Minimum date: ", as.character(min_date_h0), fill = TRUE)
+cat("Maximum date: ", as.character(max_date_h0), fill = TRUE)
+
+h0_set
+
+```
+
+
+# Process FFR set with time lags
+ 
+
+```{r}
+
+ffr_set_lag6 <- ffr_set_first_day %>%
+  filter(between(date, min_date_h0 %m-% months(6), max_date_h0 %m-% months(6))) %>%
+  mutate(date = date %m+% months(6)) %>%
+  rename(tr_mid_lag6 = tr_mid)
+
+ffr_set_lag3 <- ffr_set_first_day %>%
+  filter(between(date, min_date_h0 %m-% months(3), max_date_h0 %m-% months(3))) %>%
+  mutate(date = date %m+% months(3)) %>%
+  rename(tr_mid_lag3 = tr_mid)
+
+ffr_set_lag2 <- ffr_set_first_day %>%
+  filter(between(date, min_date_h0 %m-% months(2), max_date_h0 %m-% months(2))) %>%
+  mutate(date = date %m+% months(2)) %>%
+  rename(tr_mid_lag2 = tr_mid)
+
+ffr_set_lag1 <- ffr_set_first_day %>%
+  filter(between(date, min_date_h0 %m-% months(1), max_date_h0 %m-% months(1))) %>%
+  mutate(date = date %m+% months(1)) %>%
+  rename(tr_mid_lag1 = tr_mid)
+
+```
+
+
+# Process CPI set with time lags
+
+
+```{r}
+
+cpi_set_lag16 <- cpi_set %>%
+  filter(between(date, min_date_h0 %m-% months(16), max_date_h0 %m-% months(16))) %>%
+  mutate(date = date %m+% months(16)) %>%
+  rename(cpi_lag16 = cpi)
+
+cpi_set_lag12 <- cpi_set %>%
+  filter(between(date, min_date_h0 %m-% months(12), max_date_h0 %m-% months(12))) %>%
+  mutate(date = date %m+% months(12)) %>%
+  rename(cpi_lag12 = cpi)
+
+cpi_set_lag6 <- cpi_set %>%
+  filter(between(date, min_date_h0 %m-% months(6), max_date_h0 %m-% months(6))) %>%
+  mutate(date = date %m+% months(6)) %>%
+  rename(cpi_lag6 = cpi)
+
+```
+
+
+# Plot CPI vs. FFR
+
+
+```{r}
+
+ffr_vs_cpi_set <- h0_set %>%
+  inner_join(cpi_set_lag16, "date") %>%
+  inner_join(cpi_set_lag12, "date") %>%
+  inner_join(cpi_set_lag6, "date") %>%
+  select(-tr_mid_h6, -set) %>%
+  gather(key = "index", value = "value", -date)
+
+ffr_vs_cpi_set %>%
+  ggplot(aes(x = date, y = value, color = index, linetype = index)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "CPI vs. FFR",
+    x = "Date",
+    y = "Rate %",
+    color = "Index",
+    linetype = ""
+  ) + # Titles
+  theme_classic() + # Main theme
+  qa_dark + # Add theme settings
+  theme(axis.text.x = element_text(angle = 90), legend.position = "right") +
+  scale_x_date(date_labels = "%Y-%m-%d", breaks = "3 months") + # Date labels scale
+  scale_color_manual(values = c("tr_mid_h0" = color_pallete[3],
+                                "cpi_lag16" = color_pallete[1],
+                                "cpi_lag12" = color_pallete[2],
+                                "cpi_lag6" = color_pallete[7]
+                                ),
+                     labels = c("tr_mid_h0" = "FFR mid point",
+                                "cpi_lag16" = "CPI lag 16",
+                                "cpi_lag12" = "CPI lag 12",
+                                "cpi_lag6" = "CPI lag 6")) +
+  scale_linetype_manual(values = c("tr_mid_h0" = "solid",
+                                   "cpi_lag16" = "dotted",
+                                   "cpi_lag12" = "solid",
+                                   "cpi_lag6" = "dotted"),
+                        labels = NULL)
+
+
+```
+
+
+# Scatter plots of time lagged variables
+
+
+```{r}
+
+# Include FFR and CPI lags variables
+h0_set <- h0_set %>%
+  inner_join(ffr_set_lag6, "date") %>%
+  inner_join(ffr_set_lag3, "date") %>%
+  inner_join(ffr_set_lag2, "date") %>%
+  inner_join(ffr_set_lag1, "date") %>%
+  inner_join(cpi_set_lag16, "date") %>%
+  inner_join(cpi_set_lag12, "date") %>%
+  inner_join(cpi_set_lag6, "date")
+
+name_X <- colnames(h0_set)[!(colnames(h0_set) %in% c("date", "tr_mid_h6", "set"))]
+
+name_Y <- "tr_mid_h6"
+
+p_scatter1 <- lapply(name_X, function(x) {
+  h0_set %>%
+    filter(set %in% c("train", "test")) %>%
+    ggplot(aes(x = !!as.symbol(x), y = !!as.symbol(name_Y))) +
+    geom_point(color = color_pallete[2], size = 4) +
+    theme_classic() + # Main theme
+    qa_dark + # Add theme settings
+    labs(
+      x = x,
+      y = name_Y
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 0)
+    )
+})
+
+wrap_plots(p_scatter1)
+
+
+
+```
+
+
+# Calculating moving averages for FFR
+
+
+```{r}
+
+ffr_set_ma6 <- ffr_set_first_day %>%
+  mutate(tr_mid_ma6 = moving_avg(tr_mid, 6)) %>%
+  filter(between(date, min_date_h0, max_date_h0)) %>%
+  select(-tr_mid)
+
+ffr_set_ma3 <- ffr_set_first_day %>%
+  mutate(tr_mid_ma3 = moving_avg(tr_mid, 3)) %>%
+  filter(between(date, min_date_h0, max_date_h0)) %>%
+  select(-tr_mid)
+
+ffr_set_ma2 <- ffr_set_first_day %>%
+  mutate(tr_mid_ma2 = moving_avg(tr_mid, 2)) %>%
+  filter(between(date, min_date_h0, max_date_h0)) %>%
+  select(-tr_mid)
+
+```
+
+
+# Include new variables in FFR set and generate scatter plots
+
+
+```{r}
+
+h0_set <- h0_set %>%
+  inner_join(ffr_set_ma6, "date") %>%
+  inner_join(ffr_set_ma3, "date") %>%
+  inner_join(ffr_set_ma2, "date")
+
+name_X <- colnames(h0_set)[!(colnames(h0_set) %in% c("date", "tr_mid_h6", "set"))]
+
+p_scatter2 <- lapply(name_X, function(x) {
+  h0_set %>%
+    filter(set %in% c("train", "test")) %>%
+    ggplot(aes(x = !!as.symbol(x), y = !!as.symbol(name_Y))) +
+    geom_point(color = color_pallete[2], size = 4) +
+    theme_classic() + # Main theme
+    qa_dark + # Add theme settings
+    labs(
+      x = x,
+      y = name_Y
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 0)
+    )
+})
+
+wrap_plots(p_scatter2)
+
+
+```
+
+
+# Create log transformed variables
+
+
+```{r}
+
+log_transformed <- apply(h0_set[, name_X], 2, function(x) {
+  log(x)
+})
+colnames(log_transformed) <- paste0("log_", colnames(log_transformed))
+
+
+h0_set <- h0_set %>%
+  cbind(log_transformed)
+
+name_X_log <- colnames(log_transformed)
+
+p_scatter3 <- lapply(name_X_log, function(x) {
+  h0_set %>%
+    filter(set %in% c("train", "test")) %>%
+    ggplot(aes(x = !!as.symbol(x), y = !!as.symbol(name_Y))) +
+    geom_point(color = color_pallete[2], size = 4) +
+    theme_classic() + # Main theme
+    qa_dark + # Add theme settings
+    labs(
+      x = x,
+      y = name_Y
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 0)
+    )
+})
+
+wrap_plots(p_scatter3)
+
+
+```
+
+
+# Analyse the distribution of the original variables
+
+
+```{r}
+
+
+h0_set %>%
+  select(all_of(name_X)) %>%
+  gather(key = "variable", value = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 5, fill = color_pallete[2], color = "white") +
+  scale_fill_manual(values = color_pallete) +
+  facet_wrap(~ variable, scale = "free") +
+  theme_classic() + # Main theme
+  labs(
+    x = "Rate",
+    y = "Freq"
+  ) + # Titles
+  qa_dark + # Add theme settings
+  theme(
+    strip.text = element_text(color = "white"),
+    axis.text.x = element_text(angle = 0)
+  )
+
+
+```
+
+
+# Analyse the distribution of the transformed variables
+
+
+```{r}
+
+
+h0_set %>%
+  select(all_of(name_X_log)) %>%
+  gather(key = "variable", value = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 5, fill = color_pallete[2], color = "white") +
+  scale_fill_manual(values = color_pallete) +
+  facet_wrap(~ variable, scale = "free") +
+  theme_classic() + # Main theme
+  labs(
+    x = "Rate",
+    y = "Freq"
+  ) + # Titles
+  qa_dark + # Add theme settings
+  theme(
+    strip.text = element_text(color = "white"),
+    axis.text.x = element_text(angle = 0)
+  )
+
+
+```
+
+
+# Create a dummy variable to capture 0 variance periods
+
+
+```{r}
+
+ffr_set_dummy_lag2 <- ffr_set_first_day %>%
+  mutate(d_tr_mid_lag2 = dummy_of_variance_0(tr_mid, 2)) %>%
+  filter(between(date, min_date_h0, max_date_h0)) %>%
+  select(-tr_mid)
+
+```
+
+
+# Include the dummy variable in the dataset
+
+
+```{r}
+
+h0_set <- h0_set %>%
+  inner_join(ffr_set_dummy_lag2, "date")
+
+```
+
+
+# Correlation matrix
+
+
+```{r}
+
+name_X_selected <- c("log_tr_mid_h0", "log_tr_mid_lag1", "log_tr_mid_lag2", "log_cpi_lag16", "cpi_lag12", "log_tr_mid_lag6", "log_cpi_lag12", "cpi_lag6", "log_cpi_lag6", "log_tr_mid_ma6", "log_tr_mid_ma3", "log_tr_mid_ma2", "d_tr_mid_lag2")
+
+cor_matrix <- cor(h0_set[h0_set$set %in% c("train", "test"), c(name_X_selected, name_Y)], method = "spearman")
+
+p_cor <- ggcorrplot(cor_matrix,type = "lower",
+           lab = TRUE,
+           lab_col = "black",
+           outline.color = "white",
+           colors = viridis(4),
+           lab_size = 3.5,
+           title = "Correlation Matrix",
+           legend.title = "")
+
+p_cor <- p_cor +
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "black"),
+    axis.text.x = element_text(angle = 90, hjust = 1, color = "white"),
+    axis.text.y = element_text(color = "white"),
+    plot.title = element_text(hjust = 0.5, color = "white"),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+    legend.text = element_text(color = "white"),
+    legend.title = element_text(color = "white"),
+    panel.background = element_rect(fill = NA)
+   )
+
+p_cor
+
+
+
+```
+
+
+# Linear model
+
+
+```{r}
+
+# Filter train set
+train_set <- h0_set[h0_set$set %in% c("train", "test"), ]
+
+# Filter test set
+# test_set <- h0_set[h0_set$set == "test", ]
+
+mod <- lm(tr_mid_h6 ~ log_tr_mid_ma3 + d_tr_mid_lag2, data = train_set)
+
+# Observed values in train set
+y <- train_set$tr_mid_h6
+
+# Summary statistics of the model
+summary(mod)
+# Predicted values in train set
+y_hat = predict(mod, train_set)
+# Obtain residuals
+res <- y - y_hat
+
+```
+
+# Performance indicators
+
+
+```{r}
+
+performance_ind <- tibble(
+  "Dataset" = "train",
+  `Multiple R-squared` = r_squared(y, y_hat),
+  `Adjusted R-squared` = adjusted_r_squared(y, y_hat, 2),
+  `RMSE` = rmse(y, y_hat)
+)
+
+performance_ind %>%
+  mutate(
+    `Multiple R-squared` = percent((`Multiple R-squared`)),
+    `Adjusted R-squared` = percent((`Adjusted R-squared`)),
+    RMSE = as.character(round(RMSE, 4))
+  )
+
+
+```
+
+
+# Residuals analysis
+
+
+```{r}
+
+ggplot() +
+geom_histogram(aes(x = res, y = after_stat(count) * 100 / sum(count)), color = "white", fill = color_pallete[3], bins = 5) +
+theme_classic() + # Main theme
+labs(
+  title = "Residuals - Histogram",
+  x = "Residuals",
+  y = "Freq %"
+) + # Titles
+qa_dark + # Add theme settings
+theme(axis.text.x = element_text(angle = 0))
+
+```
+
+```{r}
+
+ggplot() +
+stat_qq(aes(sample = res), color = color_pallete[3], size = 4, alpha = 0.6) +
+stat_qq_line(aes(sample = res), color = color_pallete[2], linewidth = 1) +
+theme_classic() + # Main theme
+qa_dark + # Add theme settings
+labs(
+  x = "Normal theoretical quantiles",
+  y = "Residuals",
+  title = "Residuals - Q-Q Plot"
+) +
+theme(
+    axis.text.x = element_text(angle = 0),
+    panel.grid.major = element_line(color = "white", linewidth = 0.25, linetype = "dotted"),
+    panel.grid.minor = element_line(color = "white", linewidth = 0.25, linetype = "dotted")
+  )
+
+
+```
+
+
+
+# Statistical tests
+
+
+```{r}
+
+stats_tests <- tibble(
+  test = c("Normality of residuals - Shapiro-Wilk", "Variance of residuals - Breush-Pagan", "Autocorrelation of residuals - Durbin-Watson"),
+  statistic = c(shapiro.test(res)$statistic, ncvTest(mod)$ChiSquare, durbinWatsonTest(mod)$dw),
+  `p-value` = c(shapiro.test(res)$p.value, ncvTest(mod)$p, durbinWatsonTest(mod)$p),
+  h0 = c("Residuals are normally distributed", "The variance of residuals is constant", "There is no first-order autocorrelation in the residuals"),
+  result = ifelse(`p-value` > 0.05, "Not rejected", "Rejected")
+)
+
+stats_tests %>%
+  mutate(
+    `p-value` = percent(`p-value`),
+    statistic = as.character(round(statistic, 4))
+  )
+
+```
+
+
+# Autocorrelation function (ACF)
+
+
+```{r}
+
+# ACF values
+acf_res <- as.numeric(acf(res, plot = FALSE)$acf)
+
+# Standard devitation of residuals
+stdv_acf <- qnorm(1 - 0.05 / 2) / sqrt(length(res))
+
+# Create a data frame with the ACF values
+acf_res <- tibble(acf_res) %>%
+  mutate(lag = as.factor(seq(0, length(acf_res) - 1, 1)))
+
+# Plot the autocorrelation function
+acf_res %>%
+  ggplot(aes(x = lag, y = acf_res)) +
+  geom_bar(stat = "identity", width = 0.2, fill = color_pallete[3]) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "white", linewidth = 1) +
+  geom_hline(yintercept = stdv_acf, linetype = "dashed", color = color_pallete[2], linewidth = 1) +
+  geom_hline(yintercept = -stdv_acf, linetype = "dashed", color = color_pallete[2], linewidth = 1) +
+  theme_classic() +
+  qa_dark +
+  theme(
+    axis.text.x = element_text(angle = 0)
+  ) +
+  labs(
+    title = "Autocorrelation Function",
+    x = "Lag",
+    y = "Autocorrelation - lag 1"
+  )
+  
+
+```
+
+
+# Predicted vs. Observed
+
+
+```{r}
+
+data.frame(
+  y_hat = y_hat,
+  y = y
+) %>%
+  ggplot(aes(x = y_hat, y = y)) +
+  geom_abline(color = color_pallete[2], linewidth = 1) +
+  geom_point(color = color_pallete[3], size = 4, alpha = 0.6) +
+  theme_classic() + # Main theme
+  qa_dark + # Add theme settings
+  labs(
+    x = "Y hat",
+    y = "Y",
+    title = "Predicted vs. Observed"
+  ) +
+  theme(
+      axis.text.x = element_text(angle = 0),
+      panel.grid.major = element_line(color = "white", linewidth = 0.25, linetype = "dotted"),
+      panel.grid.minor = element_line(color = "white", linewidth = 0.25, linetype = "dotted")
+    )
+
+
+```
+
+
+# Confidence intervals for predictions
+
+
+```{r}
+
+intervals <- predict(mod, interval = "confidence", newdata = h0_set, level = 0.99)
+
+h0_set$y_hat <- intervals[, "fit"]
+h0_set$lwr <- intervals[, "lwr"]
+h0_set$upr <- intervals[, "upr"]
+
+```
+
+
+# Forecast + Confidence Intervals
+
+
+```{r}
+
+h0_forecast_set <- h0_set %>%
+  mutate(
+    tr_mid_h6 = ifelse(is.na(tr_mid_h6), y_hat, tr_mid_h6),
+    date = date %m+% months(6),
+    forecast = ifelse(set == "forecast", "Y", "N")
+  )
+
+h0_forecast_set %>%
+  ggplot(aes(x = date, ymin = lwr, ymax = upr)) +
+  geom_ribbon(alpha = 0.2, fill = color_pallete[1]) +
+  geom_line(aes(x = date, y = tr_mid_h6, color = "Observed", alpha = forecast), linewidth = 1) +
+  geom_line(aes(x = date, y = y_hat, color = "Predicted"), linewidth = 1, alpha = 0.8, linetype = "dashed") +
+  theme_classic() + # Main theme
+  labs(
+    title = "FFR's Mid Point - Forecast",
+    x = "Date",
+    y = "Mid Point %",
+    color = "",
+    alpha = ""
+  ) + # Titles
+  qa_dark +
+  scale_x_date(date_labels = "%Y-%m-%d", breaks = "2 months") +
+  scale_color_manual(values = c("Observed" = color_pallete[3], "Predicted" = color_pallete[1])) +
+  scale_alpha_manual(values = c("Y" = 0, "N" = 0.8), labels = NULL) +
+  theme(
+    panel.grid.major = element_line(color = "white", linewidth = 0.25, linetype = "dotted"),
+    panel.grid.minor = element_line(color = "white", linewidth = 0.25, linetype = "dotted")
+  )
+
+```
+
+# Display forecasts
+
+
+```{r}
+
+h0_forecast_set %>%
+  filter(forecast == "Y") %>%
+  select(date, y_hat, lwr, upr)
+
+```
+
+
