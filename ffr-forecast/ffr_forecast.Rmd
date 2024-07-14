@@ -728,6 +728,7 @@ theme(axis.text.x = element_text(angle = 0))
 
 ```
 
+
 # Normality of residuals
 
 
