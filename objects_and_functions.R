@@ -48,6 +48,23 @@ dummy_of_variance_0 <- function(X, lag) {
   return(d)
 }
 
+# Create dummy of relative change
+dummy_of_change <- function(X, lag, c) {
+  
+  if (lag <= 1) {
+    stop("Lag must be greater than 1.")
+  }
+  
+  n <- length(X)
+  d <- c(rep(NA, (lag - 1)))
+  for (i in lag:n) {
+    r <- abs(X[i] / X[i + 1 - lag] - 1)
+    d[i] <- ifelse(r > c, 1, 0)
+  }
+  return(d)
+}
+
+
 r_squared <- function(y, y_hat) {
   
   # Mean of y
