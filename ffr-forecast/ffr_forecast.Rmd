@@ -222,7 +222,7 @@ ffr_set_first_day %>%
 
 
 
-# Target variable: FFR's mid point in january 1st (12 months ahead)
+# Target variable: FFR's mid point in january 1st (6 months ahead)
 
 
 ```{r}
@@ -259,6 +259,11 @@ forecast_set <- ffr_set_first_day %>%
 
 ```
 
+```{r}
+
+forecast_set
+
+```
 
 # Create train and test partition
 
@@ -692,7 +697,7 @@ res <- y - y_hat
 ```{r}
 
 performance_ind <- tibble(
-  "Dataset" = "train",
+  "Dataset" = "train and test",
   `Multiple R-squared` = r_squared(y, y_hat),
   `Adjusted R-squared` = adjusted_r_squared(y, y_hat, 2),
   `RMSE` = rmse(y, y_hat)
@@ -861,7 +866,7 @@ acf_res %>%
 ```
 
 
-# Predicted vs. Observed
+# Fitted vs. Observed
 
 
 ```{r}
@@ -878,7 +883,7 @@ data.frame(
   labs(
     x = "Y hat",
     y = "Y",
-    title = "Predicted vs. Observed"
+    title = "Fitted vs. Observed"
   ) +
   theme(
       axis.text.x = element_text(angle = 0),
@@ -920,7 +925,7 @@ h0_forecast_set %>%
   ggplot(aes(x = date, ymin = lwr, ymax = upr)) +
   geom_ribbon(alpha = 0.2, fill = color_pallete[1]) +
   geom_line(aes(x = date, y = tr_mid_h6, color = "Observed", alpha = forecast), linewidth = 1) +
-  geom_line(aes(x = date, y = y_hat, color = "Predicted"), linewidth = 1, alpha = 0.8, linetype = "dashed") +
+  geom_line(aes(x = date, y = y_hat, color = "Fitted"), linewidth = 1, alpha = 0.8, linetype = "dashed") +
   theme_classic() + # Main theme
   labs(
     title = "FFR's Mid Point - Forecast",
@@ -931,7 +936,7 @@ h0_forecast_set %>%
   ) + # Titles
   qa_dark +
   scale_x_date(date_labels = "%Y-%m-%d", breaks = "2 months") +
-  scale_color_manual(values = c("Observed" = color_pallete[3], "Predicted" = color_pallete[1])) +
+  scale_color_manual(values = c("Observed" = color_pallete[3], "Fitted" = color_pallete[1])) +
   scale_alpha_manual(values = c("Y" = 0, "N" = 0.8), labels = NULL) +
   theme(
     panel.grid.major = element_line(color = "white", linewidth = 0.25, linetype = "dotted"),
