@@ -257,13 +257,10 @@ forecast_set <- ffr_set_first_day %>%
   filter(is.na(tr_mid_h6)) %>%
   mutate(set = "forecast")
 
-```
-
-```{r}
-
 forecast_set
 
 ```
+
 
 # Create train and test partition
 
@@ -596,6 +593,8 @@ variance_dummy_lag2 <- ffr_set_first_day %>%
   filter(between(date, min_date_h0, max_date_h0)) %>%
   select(-tr_mid)
 
+variance_dummy_lag2
+
 ```
 
 
@@ -782,6 +781,27 @@ scale_x_continuous(breaks = seq(0, 6 , 0.5))
 
 ```
 
+# Linearity check
+
+
+```{r}
+
+h0_set %>%
+    filter(set %in% c("train", "test")) %>%
+    ggplot(aes(x = log_tr_mid_ma3, y = tr_mid_h6)) +
+    geom_point(color = color_pallete[2], size = 4) +
+    theme_classic() + # Main theme
+    qa_dark + # Add theme settings
+    labs(
+      x = "log_tr_mid_ma3",
+      y = "tr_mid_h6"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 0)
+    )
+
+```
+
 
 # Homoscedasticity check
 
@@ -813,7 +833,7 @@ scale_x_continuous(breaks = seq(0, 6 , 0.5))
 ```{r}
 
 stats_tests <- tibble(
-  test = c("Normality of residuals - Shapiro-Wilk", "Variance of residuals - Breush-Pagan", "Autocorrelation of residuals - Durbin-Watson"),
+  test = c("Normality of residuals - Shapiro-Wilk", "Variance of residuals - Breusch-Pagan", "Autocorrelation of residuals - Durbin-Watson"),
   statistic = c(shapiro.test(res)$statistic, ncvTest(mod)$ChiSquare, durbinWatsonTest(mod)$dw),
   `p-value` = c(shapiro.test(res)$p.value, ncvTest(mod)$p, durbinWatsonTest(mod)$p),
   h0 = c("Residuals are normally distributed", "The variance of residuals is constant", "There is no first-order autocorrelation in the residuals"),
