@@ -120,6 +120,8 @@ rmse <- function(y, y_hat) {
   sqrt(mean((y_hat - y) ^ 2))
 }
 
+slope <- function(x, y) cor(x, y) * sd(y) / sd(x)
+
 
 
 

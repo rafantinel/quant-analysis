@@ -1,0 +1,507 @@
+
+
+# Import packages
+
+
+```{r}
+
+options(digits = 6)
+options(scipen = 999)
+
+library(tidyverse)
+library(readxl)
+library(quantmod)
+library(lubridate)
+library(writexl)
+library(PortfolioAnalytics)
+library(patchwork)
+library(timetk)
+
+source("../objects_and_functions.R")
+
+
+```
+
+
+# Read assets file
+
+
+```{r}
+
+# Read Excel file
+assets <- read_xlsx("assets.xlsx")
+
+# Display top 10 observations
+head(assets, 10)
+
+```
+
+
+# Set dates
+
+
+```{r}
+
+# Set the minimum date for asset quote
+min_date <- date("2010-01-01")
+
+# Minimum date for dividends
+min_date_dividend <- max(assets$date) %m-% months(12)
+
+# Set the maximum date
+max_date <- max(assets$date)
+
+# Print the minimum date for asset quote
+cat("Minimum date for asset quote:", as.character(min_date), fill = TRUE)
+
+# Print the minimum date for dividends
+cat("Minimum date for dividends:", as.character(min_date_dividend), fill = TRUE)
+
+# Print the maximum date
+cat("Maximum date:", as.character(max_date), fill = TRUE)
+
+```
+
+
+# Get dividends of the last 12 months for each asset
+
+
+```{r}
+
+
+dividends_12m <- map_df(assets$yahoo_api_code, function(x) {
+  
+  # Get the dividends for the current asset
+  df <- data.frame(getDividends(x, from = min_date_dividend, to = max_date, src="yahoo", auto.assign=FALSE, ))
+  
+  # Calculate the total dividends and the frequency of update
+  df <- data.frame(yahoo_api_code = x, dy12m = sum(df[, 1]), freq_dy12m = n_distinct(format(date(rownames(df)), "%Y-%m")))
+  
+})
+
+head(dividends_12m, 10)
+
+```
+
+
+# Get the assets quote
+
+
+```{r}
+
+assets_quote <- map_df(assets$yahoo_api_code, function(x) {
+  
+ # Get the quotes for the current asset
+ df <-data.frame(getSymbols(x, from = min_date, to = max_date, src="yahoo", auto.assign=FALSE))
+ 
+ # Process the returned data
+ df <- data.frame(
+   yahoo_api_code = x,
+   date = date(rownames(df)), # Create a column for dates
+   quote = df[, 4]) %>% # Select the last quote of the day
+   mutate(year_month = format(date, "%Y-%m")) %>% # Create a year-month column
+   group_by(year_month) %>% # Group by the year-month column
+   filter(date == max(date)) %>% # Select the last quote of each month
+   ungroup() %>% # Ungroup the data frame
+   mutate(log_return = log(quote / lag(quote))) %>% # Calculate log returns
+   filter(row_number() > 1) %>% # Remove the first row
+   select(-year_month) # Remove the year-month column
+  
+})
+
+head(assets_quote, 10)
+
+
+```
+
+
+# Get market indices data
+
+
+```{r}
+
+# S&P500 and Ibovespa
+indices <- c("^GSPC", "^BVSP")
+
+indices_quote <- map_df(indices, function(x) {
+  
+ # Get the quotes for the current asset
+ df <-data.frame(getSymbols(x, from = min_date, to = max_date, src="yahoo", auto.assign=FALSE))
+ 
+ # Process the returned data
+ df <- data.frame(
+   yahoo_api_code = x,
+   date = date(rownames(df)), # Create a column for dates
+   quote = df[, 4]) %>% # Select the last quote of the day
+   mutate(year_month = format(date, "%Y-%m")) %>% # Create a year-month column
+   group_by(year_month) %>% # Group by the year-month column
+   filter(date == max(date)) %>% # Select the last quote of each month
+   ungroup() %>% # Ungroup the data frame
+   mutate(log_return = log(quote / lag(quote))) %>% # Calculate log returns
+   filter(row_number() > 1) %>% # Remove the first row
+   select(-year_month) # Remove the year-month column
+  
+})
+
+head(indices_quote, 10)
+
+```
+
+
+# Analyze the frequency of the quotes for each asset
+
+
+```{r}
+
+# Calculate de frequency by asset
+assets_quote %>%
+  group_by(yahoo_api_code) %>%
+  reframe(freq = n()) %>%
+  arrange(freq)
+
+```
+
+
+# Create groups for assets based on the frequency
+
+
+```{r}
+
+assets_quote <- assets_quote %>%
+  group_by(yahoo_api_code) %>%
+  mutate(
+    freq = n(),
+    quote_group = ifelse(freq < 175, "2021 Onwards", "2010 Onwards") # Create a group based on the frequency
+  ) %>%
+  filter(ifelse(quote_group == "2021 Onwards", date >= "2021-01-01", date >= min_date)) %>% # Conditional filter
+  ungroup() %>%
+  select(-freq)
+
+
+```
+
+
+# Calculate the beta for each asset
+
+
+```{r}
+
+beta_set <- map_df(assets$yahoo_api_code, function(x) {
+  
+  # Get the type of the curent asset
+  type <- assets[assets$yahoo_api_code == x, ]$type
+  
+  # Get the index for the current asset
+  index = ifelse(type == "stocks", "^GSPC", "^BVSP")
+  
+  # Select the current asset's returns
+  current_asset <- assets_quote %>%
+    filter(yahoo_api_code == x) %>%
+    select(date, log_return) %>%
+    rename(asset_return = log_return)
+  
+  # Select the current index's returns
+  current_index <- indices_quote %>%
+    filter(yahoo_api_code == "^BVSP") %>%
+    select(date, log_return) %>%
+    rename(index_return = log_return)
+  
+  # Join the asset and the index set
+  current_set <- inner_join(current_asset, current_index, "date")
+  
+  # Get the slope of the linear model
+  beta <- slope(x = current_set$index_return, y = current_set$asset_return)
+  
+  # Return a data frame with the beta of the current asset
+  beta <- data.frame(yahoo_api_code = x, beta = beta)
+  
+})
+
+beta_set
+
+```
+
+
+# Calculate the annual return and standard deviation
+
+
+```{r}
+
+assets_annual_return <- assets_quote %>%
+  group_by(yahoo_api_code) %>%
+  reframe(
+    annual_return = mean(1 + log_return) ^ 12 - 1,
+    annual_sd = sd(log_return) * sqrt(12)
+  ) %>%
+  arrange(desc(annual_return))
+
+assets_annual_return
+
+```
+
+
+# Calculate the expected return and the Sharpe Ratio
+
+
+```{r}
+
+# Market return for stocks
+mr_stocks <- (1 + mean(indices_quote[indices_quote$yahoo_api_code == "^GSPC", ]$log_return)) ^ 12 - 1
+
+# Market return for brazilian stocks
+mr_br_stocks <- (1 + mean(indices_quote[indices_quote$yahoo_api_code == "^BVSP", ]$log_return)) ^ 12 - 1
+
+# Free risk return (log)
+fr <- log(1 + 0.08)
+
+assets <- assets %>%
+  inner_join(beta_set, "yahoo_api_code") %>% # Include the beta
+  inner_join(assets_annual_return, "yahoo_api_code") %>% # Include the annual return
+  mutate(
+    expected_return = case_when(
+      type == "stocks" ~ fr + beta * (mr_stocks - fr), 
+      TRUE ~ fr + beta * (mr_br_stocks - fr)
+    ), # Calculate the expected return using CAPM
+    sharpe_ratio = (annual_return - fr) / annual_sd # Calculate the sharpe ratio
+  ) %>%
+  arrange(type, desc(sharpe_ratio))
+
+
+```
+
+
+# Create a list of assets returns by asset group
+
+
+```{r}
+
+# Groups of assets
+quote_group <- unique(assets_quote$quote_group)
+
+# Create a set of returns for each group
+assets_quote_list <- map(quote_group, function(x) {
+
+  assets_quote %>%
+    mutate(date = ceiling_date(date, "month") - days(1)) %>% # Adjust dates
+    dplyr::filter(quote_group == x) %>% # Filter the current group
+    select(-quote, - quote_group) %>% # Remove columns
+    spread(key = yahoo_api_code, value = log_return) %>%
+    tk_xts()
+})
+
+names(assets_quote_list) <- quote_group
+
+```
+
+
+# Generate optimal portfolios
+
+
+```{r}
+
+# Create an empty list to store portfolios
+init_portfolio_list <- list()
+# Create an empty list to store the optimal portfolios
+opt_portfolio_list <- list()
+# Create an empty list to store the optimal portfolios returns
+opt_portfolio_ret_list <- list()
+# Create an empty list to store the optimal portfolios weights
+opt_portfolio_weight_list <- list()
+# Create an empty list to store portoflios efficient frontier
+efficient_frontier_list <- list()
+
+for (g in quote_group) {
+  
+  # Initialize portfolio specification object
+  init_portfolio_list[[g]] <- portfolio.spec(assets = colnames(assets_quote_list[[g]]))
+  # Add constraint of full investment (min_sum = 1 and max_sum = 1)
+  init_portfolio_list[[g]] <- add.constraint(portfolio = init_portfolio_list[[g]], type = "full_investment")
+  # Maximum sum constraint
+  init_portfolio_list[[g]]$constraints[[1]]$min_sum <- 0.99
+  # Minimum sum constraint
+  init_portfolio_list[[g]]$constraints[[1]]$max_sum <- 1.01
+  # Add constraint of box
+  init_portfolio_list[[g]] <- add.constraint(portfolio = init_portfolio_list[[g]], type = "box", min = 0.005, max = 0.1)
+  # Add risk constraint
+  init_portfolio_list[[g]] <- add.constraint(portfolio = init_portfolio_list[[g]], type = "risk", name = "StdDev")
+  # Add return objective
+  init_portfolio_list[[g]] <- add.objective(portfolio = init_portfolio_list[[g]], type = "return", name = "mean")
+  # Add risk objective
+  init_portfolio_list[[g]] <- add.objective(portfolio = init_portfolio_list[[g]], type = "risk", name = "StdDev")
+  # Optmize portfolio
+  opt_portfolio_list[[g]] <- optimize.portfolio(R = as.matrix(assets_quote_list[[g]]),
+                                          portfolio = init_portfolio_list[[g]],
+                                          optimize_method = "random",
+                                          search_size = 5000,
+                                          maxSR = TRUE,
+                                          trace = TRUE)
+  # Extract portfolio weights
+  opt_portfolio_weight_list[[g]] <- extractWeights(opt_portfolio_list[[g]])
+  # Extract portfolio returns
+  opt_portfolio_ret_list[[g]] <- Return.portfolio(
+    assets_quote_list[[g]],
+    weights = opt_portfolio_weight_list[[g]],
+    geometric = TRUE,
+    rebalance_on = NA,
+    value = 1
+  )
+  
+  # Extract mean return and standard deviation
+  efficient_frontier_list[[g]] <- as.data.frame(extractEfficientFrontier(opt_portfolio_list[[g]], match.col="mean", n.portfolios = 5000)$frontier[, 1:2])
+  
+}
+
+
+```
+
+
+# Generate efficient frontier plots
+
+
+```{r}
+
+# Create a list of plots
+efficient_frontier_plots <- lapply(quote_group, function(g) {
+  
+  # Optimal standard deviation
+  x_opt <- efficient_frontier_list[[g]] %>%
+    filter(rownames(.) == "opt") %>%
+    mutate(StdDev = StdDev * 100) %>%
+    pull(StdDev)
+  
+  # Optimal mean return
+  y_opt <- efficient_frontier_list[[g]] %>%
+    filter(rownames(.) == "opt") %>%
+    mutate(mean = mean * 100) %>%
+    pull(mean)
+  
+  efficient_frontier_list[[g]] %>%
+    mutate(
+      sr = mean / StdDev
+    ) %>%
+    ggplot(aes(x = StdDev * 100, y = mean * 100, color = sr * 100)) +
+    geom_point(size = 3) +
+    theme_classic() +
+    qa_dark +
+    scale_color_continuous(type = "viridis") +
+    labs(
+      title = paste0("Efficient Frontier - ", g),
+      x = "% Risk (standard deviation)",
+      y = "% Expected log-return",
+      color = "Sharpe Ratio"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 0),
+      legend.position = "right"
+    ) +
+    annotate("text", x = x_opt, y = y_opt * (1.04), label = "P*", color = "red")
+
+    
+})
+
+wrap_plots(efficient_frontier_plots, ncol = 1)
+
+```
+
+
+# Process returns benchmark set
+
+
+```{r}
+
+# Indices returns set
+indices_ret <- indices_quote %>%
+  rename(portfolio = yahoo_api_code) %>%
+  select(-quote) %>%
+  data.frame()
+
+# Portfolio returns list
+portfolio_ret_list <- lapply(quote_group, function(g) {
+  
+  df <- data.frame(opt_portfolio_ret_list[[g]]) %>%
+    mutate(date = rownames(.)) %>%
+    rename(log_return = portfolio.returns) %>%
+    mutate(portfolio = g) %>%
+    select(portfolio, date, log_return)  
+  
+  # Set row names to null
+  rownames(df) <- NULL
+  
+  # Return data frame
+  df
+  
+})
+
+# Set list names
+names(portfolio_ret_list) <- quote_group
+
+# Benchmark set
+ret_benchmark_set <- rbind(indices_ret, portfolio_ret_list$`2010 Onwards`, portfolio_ret_list$`2021 Onwards`)
+  
+
+```
+
+
+# Compare portfolio returns
+
+
+```{r}
+
+ret_benchmark_set %>%
+  group_by(portfolio) %>%
+  mutate(cumulative_returns = cumsum(log_return)) %>%
+  ggplot(aes(x = date, y = cumulative_returns * 100, color = portfolio)) +
+  geom_line(linewidth = 1) +
+  theme_classic() +
+  qa_dark +
+  labs(
+    title = "Cumulative Returns",
+    x = "Date",
+    y = "% Return",
+    color = "Portfolio"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 0),
+    panel.grid.major = element_line(color = "white", linewidth = 0.25, linetype = "dotted"),
+    panel.grid.minor = element_line(color = "white", linewidth = 0.25, linetype = "dotted")
+  ) +
+  scale_color_manual(values = c("^BVSP" = color_pallete[1], "^GSPC" = color_pallete[2], "2010 Onwards" = color_pallete[3], "2021 Onwards" = color_pallete[4])) +
+  scale_x_date(date_labels = "%Y-%m",date_breaks = "18 months")
+
+```
+
+# Export weights
+
+
+```{r}
+
+# Assets weight data frame
+assets_weight <- map_df(quote_group ,function(g) {
+  
+  df <- data.frame(
+    yahoo_api_code = names(opt_portfolio_weight_list[[g]]),
+    weight = opt_portfolio_weight_list[[g]],
+    portfolio = g
+  )
+  
+  # Set row names to null
+  rownames(df) <- NULL
+  
+  df
+  
+})
+
+last_quote <- assets_quote %>%
+  filter(date == max(date)) %>%
+  select(yahoo_api_code, quote, date) %>%
+  rename(quote_date = date)
+
+assets <- assets %>%
+  left_join(assets_weight, "yahoo_api_code") %>%
+  left_join(last_quote, "yahoo_api_code")
+
+# write_xlsx(assets, "portfolio.xlsx")
+
+```
+
+
